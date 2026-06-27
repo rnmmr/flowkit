@@ -8,6 +8,8 @@ __pycache__/
 output/
 youtube
 agent/active_project.json
+venv/
+har/
 
 # Generated AI tool configs (run: python setup.py)
 .claude/commands/fk:*
@@ -15,3 +17,4 @@ agent/active_project.json
 AGENTS.md
 GEMINI.md
 .fk-setup.json
+extension/_metadata/generated_indexed_rulesets/_ruleset1

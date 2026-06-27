@@ -1,5 +1,5 @@
 """
-Flow Client — communicates with Google Flow API via Chrome extension WebSocket bridge.
+Flow Client �?communicates with Google Flow API via Chrome extension WebSocket bridge.
 
 Agent runs a WS server. Extension connects as client. Agent sends API requests,
 extension executes them in browser context (residential IP, cookies, reCAPTCHA).
@@ -199,7 +199,7 @@ class FlowClient:
         the extension when the user opens the project in Chrome.
         The video reviewer falls back to get_media content directly.
         """
-        logger.info("URL refresh requested for project %s — TRPC endpoint no longer available, "
+        logger.info("URL refresh requested for project %s �?TRPC endpoint no longer available, "
                      "use extension passive intercept (open project in Chrome)", project_id[:12])
         return {"refreshed": 0, "found": 0, "note": "TRPC endpoint unavailable. "
                 "Video reviewer uses get_media fallback automatically. "
@@ -208,7 +208,7 @@ class FlowClient:
     async def _send(self, method: str, params: dict, timeout: float = 300) -> dict:
         """Send request to extension and wait for response.
 
-        Always returns a dict. On error, returns {"error": "<reason>"} — callers
+        Always returns a dict. On error, returns {"error": "<reason>"} �?callers
         must check result.get("error") or use _is_ws_error() before reading data.
         Never raises; exceptions are caught and returned as error dicts.
         """
@@ -276,38 +276,49 @@ class FlowClient:
     async def generate_images(self, prompt: str, project_id: str,
                                aspect_ratio: str = "IMAGE_ASPECT_RATIO_PORTRAIT",
                                user_paygate_tier: str = "PAYGATE_TIER_TWO",
-                               character_media_ids: list[str] = None) -> dict:
+                               character_media_ids: list[str] = None,
+                               image_model: str = None,
+                               count: int = 1,
+                               collection_id: str = None) -> dict:
         """Generate image(s).
 
         If character_media_ids is provided, uses edit_image flow (batchGenerateImages
         with imageInputs) — same endpoint, but includes character references.
         Without characters, uses plain generate_images.
 
+        count > 1 sends multiple request_items with different seeds in one batch.
+
+        If collection_id is provided, generated workflows are placed in that collection.
+
         Response structure:
             data.media[].name = mediaId (used for video gen)
         """
         ts = int(time.time() * 1000)
         ctx = self._client_context(project_id, user_paygate_tier)
+        if collection_id:
+            ctx["collectionId"] = collection_id
 
-        request_item = {
-            "clientContext": {**ctx, "sessionId": f";{ts}"},
-            "seed": ts % 1000000,
-            "structuredPrompt": {"parts": [{"text": prompt}]},
-            "imageAspectRatio": aspect_ratio,
-            "imageModelName": IMAGE_MODELS["NANO_BANANA_PRO"],
-        }
-
-        # Add character references if provided (edit_image flow)
-        if character_media_ids:
-            request_item["imageInputs"] = [
-                {"name": mid, "imageInputType": "IMAGE_INPUT_TYPE_REFERENCE"}
-                for mid in character_media_ids
-            ]
+        # Build N request items with different seeds
+        request_items = []
+        for i in range(max(count, 1)):
+            item = {
+                "clientContext": {**ctx, "sessionId": f";{ts + i}"},
+                "seed": (ts + i) % 1000000,
+                "structuredPrompt": {"parts": [{"text": prompt}]},
+                "imageAspectRatio": aspect_ratio,
+                "imageModelName": image_model or IMAGE_MODELS.get("NANO_BANANA_2", "NARWHAL"),
+            }
+            if character_media_ids:
+                item["imageInputs"] = [
+                    {"name": mid, "imageInputType": "IMAGE_INPUT_TYPE_REFERENCE"}
+                    for mid in character_media_ids
+                ]
+            request_items.append(item)
 
         batch_id = f"{uuid.uuid4()}" if character_media_ids else None
         body = {
             "clientContext": ctx,
-            "requests": [request_item],
+            "requests": request_items,
         }
         if batch_id:
             body["mediaGenerationContext"] = {"batchId": batch_id}
@@ -322,11 +333,34 @@ class FlowClient:
             "captchaAction": "IMAGE_GENERATION",
         })
 
+    async def create_collection(self, project_id: str, name: str,
+                                 parent_collection_id: str = None) -> dict:
+        """Create a collection in a project.
+
+        If parent_collection_id is omitted, creates a top-level collection.
+        Returns the collection object with its ID.
+        """
+        body = {
+            "projectId": project_id,
+            "metadata": {"displayName": name},
+        }
+        if parent_collection_id:
+            body["parentCollectionId"] = parent_collection_id
+
+        url = self._build_url("create_collection", project_id=project_id)
+        return await self._send("api_request", {
+            "url": url,
+            "method": "POST",
+            "headers": random_headers(),
+            "body": body,
+        })
+
     async def edit_image(self, prompt: str, source_media_id: str,
                           project_id: str,
                           aspect_ratio: str = "IMAGE_ASPECT_RATIO_PORTRAIT",
                           user_paygate_tier: str = "PAYGATE_TIER_ONE",
-                          character_media_ids: list[str] = None) -> dict:
+                          character_media_ids: list[str] = None,
+                          image_model: str = None) -> dict:
         """Edit an existing image using IMAGE_INPUT_TYPE_BASE_IMAGE.
 
         If character_media_ids is provided, appends them as IMAGE_INPUT_TYPE_REFERENCE
@@ -348,7 +382,7 @@ class FlowClient:
             "seed": ts % 1000000,
             "structuredPrompt": {"parts": [{"text": prompt}]},
             "imageAspectRatio": aspect_ratio,
-            "imageModelName": IMAGE_MODELS["NANO_BANANA_PRO"],
+            "imageModelName": image_model or IMAGE_MODELS.get("NANO_BANANA_2", "NARWHAL"),
             "imageInputs": image_inputs,
         }
 
@@ -412,7 +446,7 @@ class FlowClient:
             "headers": random_headers(),
             "body": body,
             "captchaAction": "VIDEO_GENERATION",
-        }, timeout=60)  # Submit only — polling is separate
+        }, timeout=60)  # Submit only ?polling is separate
 
     async def generate_video_from_references(self, reference_media_ids: list[str],
                                               prompt: str, project_id: str, scene_id: str,
@@ -420,7 +454,7 @@ class FlowClient:
                                               user_paygate_tier: str = "PAYGATE_TIER_TWO") -> dict:
         """Generate video from multiple reference images (r2v).
 
-        Uses referenceImages instead of startImage — the model composes
+        Uses referenceImages instead of startImage ?the model composes
         a video from all provided reference character images.
 
         Args:
@@ -524,16 +558,16 @@ class FlowClient:
         return isinstance(status, int) and status == 200
 
     async def get_media(self, media_id: str) -> dict:
-        """Fetch media metadata from Google Flow.
+        """Fetch media URL from Google Flow via TRPC redirect endpoint.
 
-        Returns the raw API response which contains a fresh signed URL
-        in data.fifeUrl or data.servingUri.
+        The TRPC endpoint returns a 302 redirect to the actual CDN URL.
+        We use trpc_request method which handles redirects and returns the final URL.
         """
-        url = f"{GOOGLE_FLOW_API}/v1/media/{media_id}?key={GOOGLE_API_KEY}&clientContext.tool=PINHOLE"
-        return await self._send("api_request", {
+        url = f"https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name={media_id}"
+        return await self._send("trpc_request", {
             "url": url,
             "method": "GET",
-            "headers": random_headers(),
+            "headers": {},
         }, timeout=15)
 
     async def upload_image(self, image_base64: str, mime_type: str = "image/jpeg",

@@ -1,4 +1,5 @@
 """Direct Flow API endpoints — for manual operations outside the queue."""
+import base64
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -13,6 +14,9 @@ class GenerateImageRequest(BaseModel):
     aspect_ratio: str = "IMAGE_ASPECT_RATIO_PORTRAIT"
     user_paygate_tier: str = "PAYGATE_TIER_ONE"
     character_media_ids: Optional[list[str]] = None
+    image_model: Optional[str] = None
+    count: int = 1
+    collection_id: Optional[str] = None
 
 
 class GenerateVideoRequest(BaseModel):
@@ -57,6 +61,12 @@ class EditImageRequest(BaseModel):
     project_id: str
     aspect_ratio: str = "IMAGE_ASPECT_RATIO_PORTRAIT"
     user_paygate_tier: str = "PAYGATE_TIER_ONE"
+
+
+class CreateCollectionRequest(BaseModel):
+    project_id: str
+    name: str
+    parent_collection_id: Optional[str] = None
 
 
 @router.get("/status")
@@ -155,10 +165,9 @@ async def refresh_project_urls(project_id: str):
 
 @router.get("/media/{media_id}")
 async def get_media(media_id: str):
-    """Get media metadata + fresh signed URL from Google Flow.
+    """Get media image via TRPC redirect + browser-context download.
 
-    Returns the raw response which should contain a fresh fifeUrl/servingUri.
-    Use this to refresh expired GCS signed URLs.
+    Extension fetches CDN URL with session cookies and returns base64 data.
     """
     client = get_flow_client()
     if not client.connected:
@@ -166,10 +175,30 @@ async def get_media(media_id: str):
     result = await client.get_media(media_id)
     if result.get("error"):
         raise HTTPException(502, result["error"])
-    status = result.get("status", 200)
-    if isinstance(status, int) and status >= 400:
-        raise HTTPException(status, result.get("data", "Media not found"))
-    return result.get("data", result)
+    data = result.get("data", {})
+    # Extension returns {url: "cdn_url", status: 302} from TRPC redirect
+    if isinstance(data, dict) and data.get("url"):
+        # CDN URL needs cookies — download via extension
+        # But we can also try direct download with flowKey
+        from fastapi.responses import Response
+        import httpx
+        try:
+            async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=30) as client_http:
+                resp = await client_http.get(data["url"])
+                if resp.status_code == 200:
+                    return Response(content=resp.content, media_type="image/jpeg")
+        except Exception:
+            pass
+        # Fallback: return URL for client to download
+        return {"url": data["url"]}
+    # Base64 string response
+    if isinstance(data, str):
+        from fastapi.responses import Response
+        return Response(content=base64.b64decode(data), media_type="image/jpeg")
+    if isinstance(data, dict) and data.get("data"):
+        from fastapi.responses import Response
+        return Response(content=base64.b64decode(data["data"]), media_type="image/jpeg")
+    return {"url": ""}
 
 
 @router.post("/edit-image")
@@ -207,3 +236,15 @@ async def upload_image(body: UploadImageRequest):
         raise HTTPException(result.get("status", 502), result.get("error", result.get("data")))
     media_id = result.get("_mediaId")
     return {"media_id": media_id, "raw": result.get("data", result)}
+
+
+@router.post("/create-collection")
+async def create_collection(body: CreateCollectionRequest):
+    """Create a collection in a project."""
+    client = get_flow_client()
+    if not client.connected:
+        raise HTTPException(503, "Extension not connected")
+    result = await client.create_collection(**body.model_dump(exclude_none=True))
+    if result.get("error") or (isinstance(result.get("status"), int) and result["status"] >= 400):
+        raise HTTPException(result.get("status", 502), result.get("error", result.get("data")))
+    return result.get("data", result)

@@ -251,9 +251,13 @@ function keepAlive() {
 function sendToAgent(msg) {
   // API responses (with msg.id) go via HTTP — immune to WS disconnect
   if (msg.id) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (callbackSecret) {
+      headers['X-Callback-Secret'] = callbackSecret;
+    }
     fetch('http://127.0.0.1:8100/api/ext/callback', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(msg),
     }).catch(() => {
       // HTTP failed — fallback to WS
@@ -368,19 +372,45 @@ async function handleTrpcRequest(msg) {
   const logType = url.includes('createProject') ? 'CREATE_PROJECT' : 'TRPC';
   // TRPC calls are silent — don't show in request log
 
-  const fetchHeaders = { 'Content-Type': 'application/json', ...headers };
+  const fetchHeaders = { ...headers };
+  // Only set Content-Type for non-GET requests
+  if (method !== 'GET') {
+    fetchHeaders['Content-Type'] = 'Content-Type' in headers ? headers['Content-Type'] : 'application/json';
+  }
   if (flowKey) {
     fetchHeaders['authorization'] = `Bearer ${flowKey}`;
   }
 
   try {
+    // getMediaUrlRedirect needs manual redirect to avoid CORS block on CDN
+    const isMediaRedirect = url.includes('getMediaUrlRedirect');
     const resp = await fetch(url, {
       method,
       headers: fetchHeaders,
       body: body ? JSON.stringify(body) : undefined,
-      credentials: 'include',
+      redirect: 'follow',
     });
-    const data = await resp.json();
+
+    const contentType = resp.headers.get('content-type') || '';
+    let data;
+    if (isMediaRedirect && resp.ok) {
+      // TRPC redirected to CDN — download image (CDN URL is public, no credentials needed)
+      const blob = await resp.blob();
+      const reader = new FileReader();
+      data = await new Promise((resolve) => {
+        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+        reader.readAsDataURL(blob);
+      });
+    } else if (contentType.includes('image/') || contentType.includes('application/octet-stream')) {
+      // Response is an image — return the final URL
+      data = { url: resp.url, contentType, status: resp.status };
+    } else {
+      try {
+        data = await resp.json();
+      } catch {
+        data = await resp.text();
+      }
+    }
     chrome.storage.local.set({ metrics });
     updateRequestLog(logId, { status: 'success' });
     sendToAgent({ id, status: resp.status, data });

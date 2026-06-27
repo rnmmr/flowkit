@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import signal
+import sys
 from contextlib import asynccontextmanager
 
 import websockets
@@ -90,9 +91,10 @@ async def lifespan(app: FastAPI):
 
     controller = get_worker_controller()
 
-    # SIGTERM handler for graceful shutdown
-    loop = asyncio.get_event_loop()
-    loop.add_signal_handler(signal.SIGTERM, controller.request_shutdown)
+    # SIGTERM handler for graceful shutdown (not supported on Windows)
+    if sys.platform != "win32":
+        loop = asyncio.get_event_loop()
+        loop.add_signal_handler(signal.SIGTERM, controller.request_shutdown)
 
     # Start background tasks
     ws_task = asyncio.create_task(run_ws_server())
