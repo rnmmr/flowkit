@@ -527,6 +527,33 @@ class FlowClient:
             "captchaAction": "VIDEO_GENERATION",
         }, timeout=60)
 
+    async def upscale_image(self, media_id: str,
+                             aspect_ratio: str = "IMAGE_ASPECT_RATIO_PORTRAIT") -> dict:
+        """Upscale an image via Google Flow upsampleImage endpoint."""
+        body = {
+            "clientContext": {
+                "sessionId": f";{int(time.time() * 1000)}",
+                "recaptchaContext": {
+                    "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB",
+                    "token": "",
+                },
+            },
+            "requests": [{
+                "aspectRatio": aspect_ratio,
+                "seed": int(time.time()) % 100000,
+                "imageInput": {"mediaId": media_id},
+            }],
+        }
+
+        url = self._build_url("upscale_image")
+        return await self._send("api_request", {
+            "url": url,
+            "method": "POST",
+            "headers": random_headers(),
+            "body": body,
+            "captchaAction": "IMAGE_GENERATION",
+        }, timeout=60)
+
     async def check_video_status(self, operations: list[dict]) -> dict:
         """Check status of video generation operations."""
         body = {"operations": operations}

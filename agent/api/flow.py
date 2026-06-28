@@ -45,6 +45,11 @@ class UpscaleVideoRequest(BaseModel):
     resolution: str = "VIDEO_RESOLUTION_4K"
 
 
+class UpscaleImageRequest(BaseModel):
+    media_id: str
+    aspect_ratio: str = "IMAGE_ASPECT_RATIO_PORTRAIT"
+
+
 class UploadImageRequest(BaseModel):
     file_path: str  # absolute path to local image file
     project_id: str = ""
@@ -134,6 +139,18 @@ async def upscale_video(body: UpscaleVideoRequest):
     if not client.connected:
         raise HTTPException(503, "Extension not connected")
     result = await client.upscale_video(**body.model_dump())
+    if result.get("error") or (isinstance(result.get("status"), int) and result["status"] >= 400):
+        raise HTTPException(result.get("status", 502), result.get("error", result.get("data")))
+    return result.get("data", result)
+
+
+@router.post("/upscale-image")
+async def upscale_image(body: UpscaleImageRequest):
+    """Upscale an image via Google Flow upsampleImage."""
+    client = get_flow_client()
+    if not client.connected:
+        raise HTTPException(503, "Extension not connected")
+    result = await client.upscale_image(**body.model_dump())
     if result.get("error") or (isinstance(result.get("status"), int) and result["status"] >= 400):
         raise HTTPException(result.get("status", 502), result.get("error", result.get("data")))
     return result.get("data", result)
